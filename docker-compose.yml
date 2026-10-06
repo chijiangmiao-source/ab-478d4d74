@@ -1,0 +1,74 @@
+# 海洋测绘航迹导出服务编排。
+#
+#   docker compose up web worker-a worker-b   # 启动应用栈（API + 两个竞争工作进程）
+#   docker compose run --rm verify            # 执行一次性验收（构建检查/测试/冒烟，退出码报告）
+#
+# 宿主端口可配置：WEB_HOST_PORT=9090 docker compose up web
+# 租约等参数亦可通过环境变量覆盖（见 x-env / environment）。
+
+x-default-env: &default-env
+  DATA_DIR: /data
+  LEASE_SECONDS: "30"
+  HEARTBEAT_SECONDS: "10"
+  POLL_SECONDS: "0.3"
+
+services:
+  web:
+    build: .
+    image: marine-track-export:latest
+    command: ["python", "-m", "app.main", "--no-worker"]
+    environment:
+      <<: *default-env
+      WEB_HOST: "0.0.0.0"
+      WEB_PORT: "8080"
+    ports:
+      # 可配置宿主端口：默认 8080，可用 WEB_HOST_PORT 覆盖
+      - "${WEB_HOST_PORT:-8080}:8080"
+    volumes:
+      - marine-data:/data
+    healthcheck:
+      # slim 镜像无 curl，使用标准库发起健康请求
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).status==200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+  worker-a:
+    build: .
+    image: marine-track-export:latest
+    command: ["python", "-m", "app.worker_main"]
+    environment:
+      <<: *default-env
+      WORKER_ID: "worker-a"
+    volumes:
+      - marine-data:/data
+    depends_on:
+      web:
+        condition: service_healthy
+
+  worker-b:
+    build: .
+    image: marine-track-export:latest
+    command: ["python", "-m", "app.worker_main"]
+    environment:
+      <<: *default-env
+      WORKER_ID: "worker-b"
+    volumes:
+      - marine-data:/data
+    depends_on:
+      web:
+        condition: service_healthy
+
+  # 一次性验收服务：执行构建检查、代码测试与 API/HTTP 冒烟，输出退出码后退出。
+  # 自身在容器内拉起临时 API/工作进程完成冒烟，不依赖在线的 web 服务。
+  verify:
+    profiles: ["verify"]
+    build: .
+    image: marine-track-export:latest
+    command: ["python", "-m", "verify.run"]
+    environment:
+      DATA_DIR: /data/verify
+    volumes:
+      - marine-data:/data

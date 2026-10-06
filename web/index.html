@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>海洋测绘 · 航迹导出值班台</title>
+<style>
+  :root { --bg:#0e1726; --panel:#16233a; --line:#26364f; --fg:#dbe6f5; --muted:#8aa0bd;
+          --accent:#4da3ff; --ok:#35c98f; --warn:#f0b340; --err:#ff6b6b; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--fg); }
+  header { padding:16px 24px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:16px; }
+  header h1 { font-size:18px; margin:0; }
+  header .sub { color:var(--muted); font-size:12px; }
+  main { display:grid; grid-template-columns: 420px 1fr; gap:16px; padding:16px 24px; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .panel h2 { font-size:14px; margin:0 0 12px; color:var(--accent); }
+  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
+  textarea, input { width:100%; background:#0c1422; color:var(--fg); border:1px solid var(--line);
+                    border-radius:6px; padding:8px; font:inherit; }
+  textarea { min-height:180px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; }
+  button { background:var(--accent); color:#06101f; border:0; border-radius:6px; padding:8px 14px;
+           font-weight:600; cursor:pointer; margin:10px 8px 0 0; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  button:disabled { opacity:.5; cursor:wait; }
+  .msg { margin-top:10px; font-size:13px; white-space:pre-wrap; word-break:break-all; }
+  .msg.ok { color:var(--ok); } .msg.err { color:var(--err); } .msg.warn { color:var(--warn); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:500; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:11.5px; border:1px solid var(--line); }
+  .stage-ACCEPTED { color:var(--muted); } .stage-LEASED { color:var(--accent); }
+  .stage-TEMP_WRITTEN { color:var(--warn); } .stage-VERIFIED { color:#7ad0ff; }
+  .stage-PUBLISHED { color:var(--ok); } .stage-FAILED { color:var(--err); }
+  .mono { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11.5px; }
+  .timeline { list-style:none; padding:0; margin:6px 0 0; }
+  .timeline li { padding:3px 0 3px 18px; position:relative; color:var(--muted); font-size:12px; }
+  .timeline li::before { content:"●"; position:absolute; left:0; color:var(--accent); font-size:10px; top:6px; }
+  .detail { margin-top:10px; border-top:1px dashed var(--line); padding-top:10px; }
+  code { background:#0c1422; border:1px solid var(--line); border-radius:4px; padding:1px 5px; }
+  a { color:var(--accent); }
+  .rules-chip { display:inline-block; background:#0c1422; border:1px solid var(--line); border-radius:4px;
+                padding:0 6px; margin:2px 3px 0 0; font-size:11.5px; }
+  #poll-note { float:right; color:var(--muted); font-size:11.5px; font-weight:400; }
+</style>
+</head>
+<body>
+<header>
+  <h1>海洋测绘 · 航迹导出值班台</h1>
+  <span class="sub">提交即冻结规范化输入与规则快照 · 稳定导出标识 · 租约串行处理 · 核验后原子发布</span>
+</header>
+<main>
+  <section class="panel">
+    <h2>① 当前字段遮蔽规则（可编辑）</h2>
+    <label>提交前生效；已提交导出继续按其冻结快照执行，改动不追溯</label>
+    <input id="rules-input" placeholder='例如：["note","depth"]' />
+    <div>
+      <button onclick="saveRules()">保存当前规则</button>
+      <button class="ghost" onclick="loadRules()">重新载入</button>
+    </div>
+    <div id="rules-msg" class="msg"></div>
+
+    <h2 style="margin-top:22px">② 提交航迹记录（少量 JSON）</h2>
+    <label>records 数组；不附 rules 时使用左侧当前规则</label>
+    <textarea id="records-input">[
+  {"ship_id": "HaiCe-01", "track_id": "T-2026-1006", "timestamp": "2026-10-06T01:10:00Z",
+   "longitude": 121.5042, "latitude": 31.2381, "sog": 7.4, "cog": 92.0,
+   "heading": 91, "depth": 28.6, "note": "例行航迹"}
+]</textarea>
+    <div>
+      <button id="submit-btn" onclick="submitExport()">提交导出（返回稳定标识与回执）</button>
+    </div>
+    <div id="submit-msg" class="msg"></div>
+  </section>
+
+  <section class="panel">
+    <h2>③ 处理阶段 / 冻结规则摘要 / 已发布工件 <span id="poll-note">每 2 秒真实 API 轮询</span></h2>
+    <table>
+      <thead><tr>
+        <th>稳定导出标识</th><th>阶段</th><th>冻结遮蔽字段</th><th>已发布工件摘要</th><th>操作</th>
+      </tr></thead>
+      <tbody id="export-rows"><tr><td colspan="5" style="color:var(--muted)">加载中…</td></tr></tbody>
+    </table>
+    <div id="detail" class="detail" style="display:none">
+      <strong id="detail-title"></strong>
+      <ul class="timeline" id="detail-timeline"></ul>
+    </div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
